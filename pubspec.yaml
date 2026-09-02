@@ -1,0 +1,12 @@
+name: sound_wave_backend
+description: Backend server for the SoundWave app. All YouTube requests go through this single server instead of every user's phone, so rate-limiting affects the server (which can be fixed centrally) instead of individual users.
+version: 1.0.0
+publish_to: "none"
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+  youtube_explode_dart: ^2.3.9

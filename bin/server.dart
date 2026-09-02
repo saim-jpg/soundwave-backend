@@ -1,0 +1,174 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'package:shelf_router/shelf_router.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+
+final YoutubeExplode _yt = YoutubeExplode();
+
+/// Shared across ALL app users, because this whole server is shared —
+/// once ANY user plays a song, EVERY other user benefits from this
+/// cached link instead of the server asking YouTube again. This is
+/// the single biggest advantage over the old phone-only approach.
+final Map<String, _CachedStream> _streamCache = {};
+const Duration _cacheLifetime = Duration(minutes: 40);
+
+class _CachedStream {
+  final String url;
+  final DateTime fetchedAt;
+  _CachedStream(this.url) : fetchedAt = DateTime.now();
+  bool get isExpired => DateTime.now().difference(fetchedAt) > _cacheLifetime;
+}
+
+/// Converts a YouTube video result into the same JSON shape the
+/// Flutter app already expects (matches SongModel's fields).
+Map<String, dynamic> _songToJson(Video video) {
+  return {
+    'id': video.id.value,
+    'title': _cleanTitle(video.title),
+    'artist': video.author,
+    'albumArtUrl': video.thumbnails.highResUrl,
+    'youtubeId': video.id.value,
+  };
+}
+
+/// Same title-cleaning logic that used to live in the Flutter app —
+/// moved here since the server is now the one doing the searching.
+String _cleanTitle(String rawTitle) {
+  String title = rawTitle;
+  if (title.contains('|')) {
+    title = title.split('|').first;
+  }
+  final patterns = [
+    RegExp(r'\(.*?\)'),
+    RegExp(r'\[.*?\]'),
+    RegExp(r'official video', caseSensitive: false),
+    RegExp(r'official music video', caseSensitive: false),
+    RegExp(r'lyrical video', caseSensitive: false),
+    RegExp(r'lyric video', caseSensitive: false),
+    RegExp(r'full video', caseSensitive: false),
+    RegExp(r'full song', caseSensitive: false),
+    RegExp(r'new song', caseSensitive: false),
+    RegExp(r'latest punjabi songs? \d{0,4}', caseSensitive: false),
+  ];
+  for (final p in patterns) {
+    title = title.replaceAll(p, '');
+  }
+  title = title.replaceAll(RegExp(r'\s+'), ' ').trim();
+  title = title.replaceAll(RegExp(r'^[\-\.\,\s]+|[\-\.\,\s]+$'), '');
+  return title.isEmpty ? rawTitle.trim() : title;
+}
+
+String _trendingQueryFor(String category) {
+  switch (category) {
+    case 'Punjabi':
+      return 'Trending Punjabi Songs 2026';
+    case 'Hindi':
+      return 'Trending Hindi Songs 2026';
+    case 'English':
+      return 'Trending English Songs 2026';
+    case 'All':
+    default:
+      return 'Trending Punjabi Hindi English Songs 2026';
+  }
+}
+
+Future<String> _fetchStreamUrl(String youtubeId) async {
+  final manifest = await _yt.videos.streamsClient.getManifest(youtubeId);
+  if (manifest.muxed.isNotEmpty) {
+    return manifest.muxed.withHighestBitrate().url.toString();
+  }
+  if (manifest.audioOnly.isNotEmpty) {
+    return manifest.audioOnly.withHighestBitrate().url.toString();
+  }
+  throw Exception('This song has no playable stream on YouTube.');
+}
+
+Future<String> _getAudioStreamUrl(String youtubeId) async {
+  final cached = _streamCache[youtubeId];
+  if (cached != null && !cached.isExpired) {
+    return cached.url;
+  }
+
+  const maxAttempts = 3;
+  Object? lastError;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      final url = await _fetchStreamUrl(youtubeId);
+      _streamCache[youtubeId] = _CachedStream(url);
+      return url;
+    } catch (e) {
+      lastError = e;
+      final isRateLimit = e.toString().contains('RequestLimitExceeded');
+      if (isRateLimit && attempt < maxAttempts) {
+        await Future.delayed(Duration(seconds: 3 * attempt));
+        continue;
+      }
+      break;
+    }
+  }
+  throw Exception('Could not load this song: $lastError');
+}
+
+Response _json(Object data, {int status = 200}) {
+  return Response(
+    status,
+    body: jsonEncode(data),
+    headers: {'Content-Type': 'application/json'},
+  );
+}
+
+Future<Response> _handleSearch(Request request) async {
+  final query = request.url.queryParameters['q'];
+  if (query == null || query.trim().isEmpty) {
+    return _json({'error': 'Missing "q" query parameter'}, status: 400);
+  }
+  try {
+    final results = await _yt.search.search(query);
+    final songs = results.map(_songToJson).toList();
+    return _json({'songs': songs});
+  } catch (e) {
+    return _json({'error': e.toString()}, status: 500);
+  }
+}
+
+Future<Response> _handleTrending(Request request) async {
+  final category = request.url.queryParameters['category'] ?? 'All';
+  try {
+    final results = await _yt.search.search(_trendingQueryFor(category));
+    final songs = results.map(_songToJson).toList();
+    return _json({'songs': songs});
+  } catch (e) {
+    return _json({'error': e.toString()}, status: 500);
+  }
+}
+
+Future<Response> _handleStream(Request request, String youtubeId) async {
+  try {
+    final url = await _getAudioStreamUrl(youtubeId);
+    return _json({'url': url});
+  } catch (e) {
+    return _json({'error': e.toString()}, status: 500);
+  }
+}
+
+void main(List<String> args) async {
+  final router = Router();
+
+  router.get('/search', _handleSearch);
+  router.get('/trending', _handleTrending);
+  router.get('/stream/<youtubeId>', _handleStream);
+  router.get(
+    '/',
+    (Request request) => Response.ok('SoundWave backend is running.'),
+  );
+
+  final handler = const Pipeline()
+      .addMiddleware(logRequests())
+      .addHandler(router.call);
+
+  final port = int.parse(Platform.environment['PORT'] ?? '8080');
+  final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);
+  print('SoundWave backend listening on port ${server.port}');
+}
