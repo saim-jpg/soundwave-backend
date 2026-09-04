@@ -1,11 +1,38 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-final YoutubeExplode _yt = YoutubeExplode();
+/// A custom HTTP client that adds our logged-in YouTube account's
+/// cookies to every single request sent to YouTube. This makes our
+/// server look like a real logged-in browser instead of an anonymous
+/// bot, which is the fix for YouTube's "unavailable"/rate-limit
+/// errors that data-center servers (like Render) run into.
+class _CookieHttpClient extends http.BaseClient {
+  final http.Client _inner = http.Client();
+  final String _cookieHeader;
+
+  _CookieHttpClient(this._cookieHeader);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    if (_cookieHeader.isNotEmpty) {
+      request.headers['cookie'] = _cookieHeader;
+    }
+    return _inner.send(request);
+  }
+}
+
+/// Reads the cookie string from Render's Environment settings
+/// (never hard-coded here, so it's never exposed in the GitHub code).
+final String _ytCookies = Platform.environment['YT_COOKIES'] ?? '';
+
+final YoutubeExplode _yt = YoutubeExplode(
+  httpClient: YoutubeHttpClient(_CookieHttpClient(_ytCookies)),
+);
 
 /// Shared across ALL app users, because this whole server is shared —
 /// once ANY user plays a song, EVERY other user benefits from this
@@ -164,9 +191,8 @@ void main(List<String> args) async {
     (Request request) => Response.ok('SoundWave backend is running.'),
   );
 
-  final handler = const Pipeline()
-      .addMiddleware(logRequests())
-      .addHandler(router.call);
+  final handler =
+      const Pipeline().addMiddleware(logRequests()).addHandler(router.call);
 
   final port = int.parse(Platform.environment['PORT'] ?? '8080');
   final server = await shelf_io.serve(handler, InternetAddress.anyIPv4, port);

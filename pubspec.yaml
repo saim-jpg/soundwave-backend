@@ -10,3 +10,4 @@ dependencies:
   shelf: ^1.4.1
   shelf_router: ^1.1.4
   youtube_explode_dart: ^3.0.5
+  http: ^1.2.0
