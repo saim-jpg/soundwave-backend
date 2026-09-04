@@ -111,15 +111,17 @@ Future<String> _fetchStreamUrl(String youtubeId) async {
   // fine for the exact same video. This is the officially supported
   // way the youtube_explode_dart package handles this — see
   // getManifest(videoId, ytClients: [...]) in the package docs.
-  final clientsToTry = [
-    YoutubeApiClient.tv,
-    YoutubeApiClient.androidVr,
-    YoutubeApiClient.ios,
-    YoutubeApiClient.safari,
-  ];
+  final clientsToTry = <String, YoutubeApiClient>{
+    'tv': YoutubeApiClient.tv,
+    'androidVr': YoutubeApiClient.androidVr,
+    'ios': YoutubeApiClient.ios,
+    'safari': YoutubeApiClient.safari,
+  };
 
   Object? lastError;
-  for (final client in clientsToTry) {
+  for (final entry in clientsToTry.entries) {
+    final name = entry.key;
+    final client = entry.value;
     try {
       final manifest = await _yt.videos.streamsClient.getManifest(
         youtubeId,
@@ -133,10 +135,10 @@ Future<String> _fetchStreamUrl(String youtubeId) async {
       }
       // This client returned a manifest but with no usable streams —
       // try the next client instead of giving up.
-      print('Client $client gave no playable streams for $youtubeId');
+      print('Client "$name" gave no playable streams for $youtubeId');
     } catch (e) {
       lastError = e;
-      print('Client $client failed for $youtubeId: $e');
+      print('Client "$name" failed for $youtubeId: $e');
       continue;
     }
   }
