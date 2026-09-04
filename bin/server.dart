@@ -5,6 +5,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:youtube_explode_dart/solvers.dart';
 
 /// A custom HTTP client that adds our logged-in YouTube account's
 /// cookies to every single request sent to YouTube. This makes our
@@ -30,9 +31,10 @@ class _CookieHttpClient extends http.BaseClient {
 /// (never hard-coded here, so it's never exposed in the GitHub code).
 final String _ytCookies = Platform.environment['YT_COOKIES'] ?? '';
 
-final YoutubeExplode _yt = YoutubeExplode(
-  httpClient: YoutubeHttpClient(_CookieHttpClient(_ytCookies)),
-);
+/// Set up properly inside main() below, because solving YouTube's JS
+/// challenge requires an async step (starting the Deno process) —
+/// so this can't be created immediately like before.
+late final YoutubeExplode _yt;
 
 /// Shared across ALL app users, because this whole server is shared —
 /// once ANY user plays a song, EVERY other user benefits from this
@@ -182,6 +184,25 @@ Future<Response> _handleStream(Request request, String youtubeId) async {
 
 void main(List<String> args) async {
   print('Cookie length loaded: ${_ytCookies.length}');
+
+  // Try to start the Deno JS-challenge solver. On Render, the
+  // Dockerfile places the "deno" program where the system can find
+  // it, so this succeeds. On a local Windows computer (without Deno
+  // installed), this will fail — which is fine, we just continue
+  // without it instead of crashing the whole server.
+  JsChallengeSolver? jsSolver;
+  try {
+    jsSolver = await DenoEJSSolver.init();
+    print('Deno JS solver started successfully.');
+  } catch (e) {
+    print(
+        'Deno JS solver not available (expected on local Windows testing): $e');
+  }
+
+  _yt = YoutubeExplode(
+    httpClient: YoutubeHttpClient(_CookieHttpClient(_ytCookies)),
+    jsSolver: jsSolver,
+  );
 
   final router = Router();
 
