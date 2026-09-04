@@ -6,6 +6,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:youtube_explode_dart/solvers.dart';
+import 'package:youtube_explode_dart/js_challenge.dart';
 
 /// A custom HTTP client that adds our logged-in YouTube account's
 /// cookies to every single request sent to YouTube. This makes our
@@ -190,7 +191,12 @@ void main(List<String> args) async {
   // it, so this succeeds. On a local Windows computer (without Deno
   // installed), this will fail — which is fine, we just continue
   // without it instead of crashing the whole server.
-  JsChallengeSolver? jsSolver;
+  //
+  // NOTE: the correct type name from the youtube_explode_dart package
+  // is "BaseJSChallengeSolver" (from js_challenge.dart), NOT
+  // "JsChallengeSolver". Using the wrong name is what broke the build
+  // last time.
+  BaseJSChallengeSolver? jsSolver;
   try {
     jsSolver = await DenoEJSSolver.init();
     print('Deno JS solver started successfully.');
