@@ -181,6 +181,8 @@ Future<Response> _handleStream(Request request, String youtubeId) async {
 }
 
 void main(List<String> args) async {
+  print('Cookie length loaded: ${_ytCookies.length}');
+
   final router = Router();
 
   router.get('/search', _handleSearch);
