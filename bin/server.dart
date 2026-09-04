@@ -105,14 +105,43 @@ String _trendingQueryFor(String category) {
 }
 
 Future<String> _fetchStreamUrl(String youtubeId) async {
-  final manifest = await _yt.videos.streamsClient.getManifest(youtubeId);
-  if (manifest.muxed.isNotEmpty) {
-    return manifest.muxed.withHighestBitrate().url.toString();
+  // Try several YouTube "client identities" one by one. YouTube
+  // sometimes blocks/restricts one client (e.g. the default web
+  // client) while others (tv, androidVr, ios, safari) still work
+  // fine for the exact same video. This is the officially supported
+  // way the youtube_explode_dart package handles this — see
+  // getManifest(videoId, ytClients: [...]) in the package docs.
+  final clientsToTry = [
+    YoutubeApiClient.tv,
+    YoutubeApiClient.androidVr,
+    YoutubeApiClient.ios,
+    YoutubeApiClient.safari,
+  ];
+
+  Object? lastError;
+  for (final client in clientsToTry) {
+    try {
+      final manifest = await _yt.videos.streamsClient.getManifest(
+        youtubeId,
+        ytClients: [client],
+      );
+      if (manifest.muxed.isNotEmpty) {
+        return manifest.muxed.withHighestBitrate().url.toString();
+      }
+      if (manifest.audioOnly.isNotEmpty) {
+        return manifest.audioOnly.withHighestBitrate().url.toString();
+      }
+      // This client returned a manifest but with no usable streams —
+      // try the next client instead of giving up.
+      print('Client $client gave no playable streams for $youtubeId');
+    } catch (e) {
+      lastError = e;
+      print('Client $client failed for $youtubeId: $e');
+      continue;
+    }
   }
-  if (manifest.audioOnly.isNotEmpty) {
-    return manifest.audioOnly.withHighestBitrate().url.toString();
-  }
-  throw Exception('This song has no playable stream on YouTube.');
+  throw Exception(
+      'This song has no playable stream on YouTube (tried all clients). Last error: $lastError');
 }
 
 Future<String> _getAudioStreamUrl(String youtubeId) async {
